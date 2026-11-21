@@ -141,3 +141,59 @@ def test_settings_validation_and_private_key_normalization() -> None:
             FIREBASE_CLIENT_EMAIL="svc@proj-1.iam.gserviceaccount.com",
             FIREBASE_PRIVATE_KEY="key",
         )
+
+
+def test_private_key_normalization_handles_quotes_json_and_single_line() -> None:
+    quoted = Settings(
+        BOT_TOKEN="123456:AAValidTokenFormat",
+        FIREBASE_PROJECT_ID="proj-1",
+        FIREBASE_CLIENT_EMAIL="svc@proj-1.iam.gserviceaccount.com",
+        FIREBASE_PRIVATE_KEY='"-----BEGIN PRIVATE KEY-----\\nAAAA\\nBBBB\\n-----END PRIVATE KEY-----\\n",',
+    )
+    assert quoted.normalized_firebase_private_key == (
+        "-----BEGIN PRIVATE KEY-----\nAAAABBBB\n-----END PRIVATE KEY-----\n"
+    )
+
+    from_json = Settings(
+        BOT_TOKEN="123456:AAValidTokenFormat",
+        FIREBASE_PROJECT_ID="proj-1",
+        FIREBASE_CLIENT_EMAIL="svc@proj-1.iam.gserviceaccount.com",
+        FIREBASE_PRIVATE_KEY='{"private_key": "-----BEGIN PRIVATE KEY-----\\nCCCC\\n-----END PRIVATE KEY-----\\n"}',
+    )
+    assert from_json.normalized_firebase_private_key == (
+        "-----BEGIN PRIVATE KEY-----\nCCCC\n-----END PRIVATE KEY-----\n"
+    )
+
+
+def test_storage_mode_auto_falls_back_on_invalid_firebase_key_while_firestore_is_strict(
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    from astralio.app import build_service_container
+    from astralio.infrastructure.firebase import FirebaseInitError
+    from astralio.infrastructure.local_store import LocalFileFirestoreClient
+
+    local_file = Path(str(tmp_path)) / "fallback.json"
+
+    auto_settings = Settings(
+        BOT_TOKEN="123456:AAValidTokenFormat",
+        FIREBASE_PROJECT_ID="proj-1",
+        FIREBASE_CLIENT_EMAIL="svc@proj-1.iam.gserviceaccount.com",
+        FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nINVALID\n-----END PRIVATE KEY-----\n",
+        STORAGE_MODE="auto",
+        LOCAL_DB_PATH=str(local_file),
+    )
+    container = build_service_container(auto_settings)
+    assert isinstance(container.feedback_repository._db, LocalFileFirestoreClient)
+
+    strict_settings = Settings(
+        BOT_TOKEN="123456:AAValidTokenFormat",
+        FIREBASE_PROJECT_ID="proj-1",
+        FIREBASE_CLIENT_EMAIL="svc@proj-1.iam.gserviceaccount.com",
+        FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nINVALID\n-----END PRIVATE KEY-----\n",
+        STORAGE_MODE="firestore",
+        LOCAL_DB_PATH=str(local_file),
+    )
+    with pytest.raises(FirebaseInitError):
+        build_service_container(strict_settings)

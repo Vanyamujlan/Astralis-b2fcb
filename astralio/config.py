@@ -22,11 +22,18 @@ class Settings(BaseSettings):
     # Required Telegram Bot token
     bot_token: SecretStr = Field(alias="BOT_TOKEN")
 
-    # Required Firebase / Firestore credentials
-    firebase_project_id: str = Field(alias="FIREBASE_PROJECT_ID", min_length=1)
-    firebase_client_email: str = Field(alias="FIREBASE_CLIENT_EMAIL", min_length=3)
-    firebase_private_key: SecretStr = Field(alias="FIREBASE_PRIVATE_KEY")
+    # Firebase / Firestore credentials (required for Firestore mode; optional in local preview mode)
+    firebase_project_id: str | None = Field(default=None, alias="FIREBASE_PROJECT_ID")
+    firebase_client_email: str | None = Field(default=None, alias="FIREBASE_CLIENT_EMAIL")
+    firebase_private_key: SecretStr | None = Field(default=None, alias="FIREBASE_PRIVATE_KEY")
     firebase_database_id: str | None = Field(default=None, alias="FIREBASE_DATABASE_ID")
+
+    # Storage backend: "auto" uses Firestore when Admin credentials are set, else local JSON file
+    storage_mode: Literal["auto", "firestore", "local"] = Field(
+        default="auto",
+        alias="STORAGE_MODE",
+    )
+    local_db_path: str = Field(default=".astralio_local_db.json", alias="LOCAL_DB_PATH")
 
     # Optional AI interpretation service (fallback to local deterministic engine when empty)
     ai_api_key: SecretStr | None = Field(default=None, alias="AI_API_KEY")
@@ -56,17 +63,19 @@ class Settings(BaseSettings):
         alias="LOG_LEVEL",
     )
 
-    @field_validator("firebase_database_id", mode="before")
+    @field_validator(
+        "firebase_project_id", "firebase_client_email", "firebase_database_id", mode="before"
+    )
     @classmethod
     def _empty_str_to_none(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        stripped = str(value).strip()
+        stripped = str(value).strip().strip('"').strip("'").strip()
         return stripped or None
 
-    @field_validator("ai_api_key", mode="before")
+    @field_validator("ai_api_key", "firebase_private_key", mode="before")
     @classmethod
-    def _empty_ai_key_to_none(cls, value: str | SecretStr | None) -> str | SecretStr | None:
+    def _empty_secret_to_none(cls, value: str | SecretStr | None) -> str | SecretStr | None:
         if value is None:
             return None
         if isinstance(value, SecretStr):
@@ -77,25 +86,77 @@ class Settings(BaseSettings):
     @field_validator("bot_token")
     @classmethod
     def _validate_bot_token(cls, value: SecretStr) -> SecretStr:
-        raw = value.get_secret_value().strip()
+        raw = value.get_secret_value().strip().strip('"').strip("'").strip()
         if not raw or ":" not in raw:
             raise ValueError(
                 "BOT_TOKEN must be a valid Telegram Bot API token (format '<id>:<hash>')."
             )
         return SecretStr(raw)
 
-    @field_validator("firebase_private_key")
-    @classmethod
-    def _validate_private_key(cls, value: SecretStr) -> SecretStr:
-        raw = value.get_secret_value().strip()
-        if not raw:
-            raise ValueError("FIREBASE_PRIVATE_KEY must not be empty.")
-        return SecretStr(raw)
+    @property
+    def has_firebase_admin_credentials(self) -> bool:
+        """Whether full Firebase Admin SDK service account credentials are configured."""
+        return bool(
+            self.firebase_project_id
+            and self.firebase_client_email
+            and self.firebase_private_key
+            and self.firebase_private_key.get_secret_value().strip()
+        )
+
+    @property
+    def resolved_storage_mode(self) -> Literal["firestore", "local"]:
+        """Resolve effective storage backend based on STORAGE_MODE and credentials."""
+        if self.storage_mode == "firestore":
+            return "firestore"
+        if self.storage_mode == "local":
+            return "local"
+        return "firestore" if self.has_firebase_admin_credentials else "local"
 
     @property
     def normalized_firebase_private_key(self) -> str:
-        """Return Firebase private key with escaped newlines converted to real newlines."""
-        return self.firebase_private_key.get_secret_value().replace("\\n", "\n")
+        """Normalize Firebase private key pasted from .env or cloud Secrets UI."""
+        if self.firebase_private_key is None:
+            return ""
+        import json
+        import re
+
+        raw = self.firebase_private_key.get_secret_value().strip()
+
+        if raw.startswith("{"):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and isinstance(parsed.get("private_key"), str):
+                    raw = parsed["private_key"].strip()
+            except Exception:
+                pass
+
+        # Convert escaped newlines (both \\n and \n) and CRLF into standard LF
+        normalized = (
+            raw.replace("\\\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
+
+        # Always extract the clean PEM block (strips stray quotes, commas, JSON prefixes/suffixes)
+        match = re.search(
+            r"(-----BEGIN (?:RSA )?PRIVATE KEY-----)(.*?)(-----END (?:RSA )?PRIVATE KEY-----)",
+            normalized,
+            flags=re.DOTALL,
+        )
+        if match:
+            begin_marker, body, end_marker = match.group(1), match.group(2), match.group(3)
+            compact_body = "".join(body.split())
+            lines = [compact_body[i : i + 64] for i in range(0, len(compact_body), 64)]
+            return f"{begin_marker}\n" + "\n".join(lines) + f"\n{end_marker}\n"
+
+        if (normalized.startswith('"') and normalized.endswith('"')) or (
+            normalized.startswith("'") and normalized.endswith("'")
+        ):
+            normalized = normalized[1:-1].strip()
+        if normalized and not normalized.endswith("\n"):
+            normalized += "\n"
+        return normalized
 
     @property
     def has_ai_configured(self) -> bool:
@@ -104,11 +165,10 @@ class Settings(BaseSettings):
 
     def secret_values(self) -> list[str]:
         """Return all configured secret strings for log redaction."""
-        secrets: list[str] = [
-            self.bot_token.get_secret_value(),
-            self.firebase_private_key.get_secret_value(),
-            self.normalized_firebase_private_key,
-        ]
+        secrets: list[str] = [self.bot_token.get_secret_value()]
+        if self.firebase_private_key is not None:
+            secrets.append(self.firebase_private_key.get_secret_value())
+            secrets.append(self.normalized_firebase_private_key)
         if self.ai_api_key is not None:
             secrets.append(self.ai_api_key.get_secret_value())
         return [s for s in secrets if s]

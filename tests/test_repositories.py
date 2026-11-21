@@ -102,3 +102,38 @@ async def test_user_repository_wraps_firestore_errors() -> None:
 
     with pytest.raises(RepositoryError):
         await repo.get_user(42)
+
+
+@pytest.mark.asyncio
+async def test_local_file_store_persists_users_and_deduplicates_payments(tmp_path: object) -> None:
+    from pathlib import Path
+
+    from astralio.infrastructure.local_store import LocalFileFirestoreClient
+
+    db_file = Path(str(tmp_path)) / "local_db.json"
+    store1 = LocalFileFirestoreClient(db_file)
+    user_repo1 = UserRepository(store1)
+    pay_repo1 = PaymentRepository(store1)
+
+    await user_repo1.get_or_create_user(telegram_id=99, first_name="Олег", username="oleg")
+    record = PaymentRecord(
+        charge_id="local_charge_1",
+        telegram_id=99,
+        plan=SubscriptionPlan.MONTHLY,
+        amount=199,
+        currency="XTR",
+        invoice_payload="astralio:stars:monthly:99",
+    )
+    assert await pay_repo1.record_payment_idempotent(record) is True
+
+    # Reload from disk into a fresh instance to verify persistence
+    store2 = LocalFileFirestoreClient(db_file)
+    user_repo2 = UserRepository(store2)
+    pay_repo2 = PaymentRepository(store2)
+
+    loaded = await user_repo2.get_user(99)
+    assert loaded is not None
+    assert loaded.first_name == "Олег"
+
+    with pytest.raises(DuplicatePaymentError):
+        await pay_repo2.record_payment_idempotent(record)

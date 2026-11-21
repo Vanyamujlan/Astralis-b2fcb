@@ -1,0 +1,233 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: default deny everything not explicitly permitted.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. Entity Validation Blueprints (synchronized verbatim with firebase-blueprint.json)
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'birthDate',
+          'birthTime',
+          'birthTimeUnknown',
+          'birthPlace',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'birthDate',
+          'birthTime',
+          'birthTimeUnknown',
+          'birthPlace',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 100 &&
+        data.birthDate is string &&
+        data.birthDate.size() <= 10 &&
+        data.birthDate.matches('^(|\\d{4}-\\d{2}-\\d{2})$') &&
+        data.birthTime is string &&
+        data.birthTime.size() <= 5 &&
+        data.birthTime.matches('^(|\\d{2}:\\d{2})$') &&
+        data.birthTimeUnknown is bool &&
+        data.birthPlace is string &&
+        data.birthPlace.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTarotReading(data, userId, readingId) {
+      return data.keys().hasAll([
+          'readingId',
+          'uid',
+          'spreadType',
+          'spreadTitle',
+          'question',
+          'cardsSummary',
+          'summary',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'readingId',
+          'uid',
+          'spreadType',
+          'spreadTitle',
+          'question',
+          'cardsSummary',
+          'summary',
+          'createdAt'
+        ]) &&
+        isValidId(data.readingId) &&
+        data.readingId.size() <= 64 &&
+        data.readingId == readingId &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.spreadType is string &&
+        data.spreadType.size() <= 32 &&
+        data.spreadType in ['one_card', 'three_cards', 'relationship', 'path_choice'] &&
+        data.spreadTitle is string &&
+        data.spreadTitle.size() >= 1 &&
+        data.spreadTitle.size() <= 80 &&
+        data.question is string &&
+        data.question.size() <= 300 &&
+        data.cardsSummary is string &&
+        data.cardsSummary.size() >= 1 &&
+        data.cardsSummary.size() <= 1000 &&
+        data.summary is string &&
+        data.summary.size() >= 1 &&
+        data.summary.size() <= 1500 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidFeedbackEntry(data, feedbackId) {
+      return data.keys().hasAll([
+          'feedbackId',
+          'uid',
+          'message',
+          'status',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'feedbackId',
+          'uid',
+          'message',
+          'status',
+          'createdAt'
+        ]) &&
+        isValidId(data.feedbackId) &&
+        data.feedbackId.size() <= 64 &&
+        data.feedbackId == feedbackId &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.message is string &&
+        data.message.size() >= 5 &&
+        data.message.size() <= 2000 &&
+        data.status is string &&
+        data.status.size() <= 16 &&
+        data.status in ['open', 'reviewed'] &&
+        data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Private User Profile (PII isolated to owner only; list is forbidden)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action: Update Birth Profile & Display Name
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'birthDate',
+            'birthTime',
+            'birthTimeUnknown',
+            'birthPlace',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if false;
+
+      // Tarot Readings Subcollection (Master Gate checks parent /users/{userId} exists)
+      match /tarotReadings/{readingId} {
+        allow get: if isValidId(userId) &&
+          isValidId(readingId) &&
+          isOwner(userId) &&
+          existing().uid == request.auth.uid;
+
+        allow list: if isValidId(userId) &&
+          isOwner(userId) &&
+          existing().uid == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(readingId) &&
+          isOwner(userId) &&
+          isValidTarotReading(incoming(), userId, readingId) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(readingId) &&
+          isOwner(userId) &&
+          existing().uid == request.auth.uid &&
+          exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+
+    // User Feedback Collection (author can create with status='open' and view own submissions)
+    match /feedback/{feedbackId} {
+      allow get: if isValidId(feedbackId) &&
+        isSignedIn() &&
+        existing().uid == request.auth.uid;
+
+      allow list: if isSignedIn() &&
+        existing().uid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(feedbackId) &&
+        isValidFeedbackEntry(incoming(), feedbackId) &&
+        incoming().status == 'open' &&
+        incoming().createdAt == request.time;
+
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from telegram import BotCommand, Update
@@ -10,8 +11,9 @@ from telegram.ext import Application, ApplicationBuilder
 from astralio.config import Settings
 from astralio.handlers import register_all_handlers
 from astralio.handlers.deps import SERVICES_BOT_DATA_KEY, ServiceContainer
-from astralio.infrastructure.firebase import create_firestore_client
+from astralio.infrastructure.firebase import FirebaseInitError, create_firestore_client
 from astralio.infrastructure.geocoding import GeocodingService
+from astralio.infrastructure.local_store import LocalFileFirestoreClient
 from astralio.repositories.feedback_repository import FeedbackRepository
 from astralio.repositories.payment_repository import PaymentRepository
 from astralio.repositories.reading_repository import ReadingRepository
@@ -24,6 +26,8 @@ from astralio.services.premium_service import PremiumService
 from astralio.services.tarot_service import TarotService
 from astralio.services.user_service import UserService
 
+logger = logging.getLogger(__name__)
+
 
 def build_service_container(
     settings: Settings,
@@ -31,7 +35,26 @@ def build_service_container(
     firestore_client: Any | None = None,
 ) -> ServiceContainer:
     """Instantiate repositories and services cleanly for production or tests."""
-    db = firestore_client if firestore_client is not None else create_firestore_client(settings)
+    if firestore_client is not None:
+        db = firestore_client
+    elif settings.resolved_storage_mode == "firestore":
+        try:
+            db = create_firestore_client(settings)
+        except FirebaseInitError:
+            if settings.storage_mode == "firestore":
+                raise
+            logger.warning(
+                "Firestore initialization failed in auto mode; falling back to local JSON store (%s). "
+                "Update FIREBASE_PRIVATE_KEY in secrets to enable Firestore.",
+                settings.local_db_path,
+            )
+            db = LocalFileFirestoreClient(settings.local_db_path)
+    else:
+        logger.warning(
+            "Firebase Admin SDK credentials not configured; starting with local JSON store (%s).",
+            settings.local_db_path,
+        )
+        db = LocalFileFirestoreClient(settings.local_db_path)
 
     user_repo = UserRepository(db)
     reading_repo = ReadingRepository(db)
@@ -68,7 +91,9 @@ def build_service_container(
 
 
 async def _post_init(app: Application) -> None:
-    """Register clean Telegram bot commands menu on startup."""
+    """Register clean Telegram bot commands menu and log verified bot identity on startup."""
+    me = await app.bot.get_me()
+    logger.info("Telegram Bot API connected successfully: @%s (id=%s)", me.username, me.id)
     await app.bot.set_my_commands(
         [
             BotCommand("start", "Запустить Astralio"),

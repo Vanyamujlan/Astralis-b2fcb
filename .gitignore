@@ -27,4 +27,5 @@ serviceAccountKey.json
 credentials.json
 *.pem
 *.key
+.astralio_local_db.json*
 

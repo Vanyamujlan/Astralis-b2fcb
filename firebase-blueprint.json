@@ -1,0 +1,181 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Astralio user profile and birth details stored privately per user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "birthDate": {
+          "type": "string",
+          "description": "Birth date in YYYY-MM-DD format or empty string if unset.",
+          "maxLength": 10,
+          "pattern": "^(|\\d{4}-\\d{2}-\\d{2})$"
+        },
+        "birthTime": {
+          "type": "string",
+          "description": "Birth time in HH:MM format or empty string if unknown.",
+          "maxLength": 5,
+          "pattern": "^(|\\d{2}:\\d{2})$"
+        },
+        "birthTimeUnknown": {
+          "type": "boolean",
+          "description": "Whether the exact birth time is unknown."
+        },
+        "birthPlace": {
+          "type": "string",
+          "description": "Birth city or coordinates.",
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "birthDate",
+        "birthTime",
+        "birthTimeUnknown",
+        "birthPlace",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "TarotReading": {
+      "title": "TarotReading",
+      "description": "Persisted Tarot spread reading belonging to a specific user.",
+      "type": "object",
+      "properties": {
+        "readingId": {
+          "type": "string",
+          "description": "Unique identifier of the reading document.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "uid": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "spreadType": {
+          "type": "string",
+          "description": "Selected Tarot spread identifier.",
+          "enum": ["one_card", "three_cards", "relationship", "path_choice"]
+        },
+        "spreadTitle": {
+          "type": "string",
+          "description": "Human-readable spread title.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "question": {
+          "type": "string",
+          "description": "Optional user question (empty string if omitted).",
+          "maxLength": 300
+        },
+        "cardsSummary": {
+          "type": "string",
+          "description": "Drawn cards with orientation (upright or reversed).",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "summary": {
+          "type": "string",
+          "description": "Concise interpretation summary for the reading.",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the reading was recorded."
+        }
+      },
+      "required": [
+        "readingId",
+        "uid",
+        "spreadType",
+        "spreadTitle",
+        "question",
+        "cardsSummary",
+        "summary",
+        "createdAt"
+      ]
+    },
+    "FeedbackEntry": {
+      "title": "FeedbackEntry",
+      "description": "User feedback submission with terminal status protection.",
+      "type": "object",
+      "properties": {
+        "feedbackId": {
+          "type": "string",
+          "description": "Unique feedback identifier.",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "uid": {
+          "type": "string",
+          "description": "Author Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "message": {
+          "type": "string",
+          "description": "Feedback text submitted by the user.",
+          "minLength": 5,
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "description": "Processing status of feedback.",
+          "enum": ["open", "reviewed"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when feedback was submitted."
+        }
+      },
+      "required": ["feedbackId", "uid", "message", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile and birth details; strictly owner-only."
+    },
+    "/users/{userId}/tarotReadings/{readingId}": {
+      "schema": { "$ref": "#/entities/TarotReading" },
+      "description": "User-owned Tarot reading history protected by Master Gate on parent user profile."
+    },
+    "/feedback/{feedbackId}": {
+      "schema": { "$ref": "#/entities/FeedbackEntry" },
+      "description": "User feedback submissions; users can create and view their own feedback only."
+    }
+  }
+}

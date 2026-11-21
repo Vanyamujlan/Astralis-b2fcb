@@ -30,8 +30,9 @@ def main() -> int:
 
     configure_logging(level=settings.log_level, secrets=settings.secret_values())
     logger.info(
-        "Starting Astralio bot | project=%s | ai_enabled=%s | stars_enabled=%s",
-        settings.firebase_project_id,
+        "Starting Astralio bot | storage=%s | project=%s | ai_enabled=%s | stars_enabled=%s",
+        settings.resolved_storage_mode,
+        settings.firebase_project_id or "none",
         settings.has_ai_configured,
         settings.telegram_stars_enabled,
     )

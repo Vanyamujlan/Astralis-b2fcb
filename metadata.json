@@ -1,0 +1,6 @@
+{
+  "name": "Astralio",
+  "description": "Astralio Telegram Bot MVP: natal charts via Swiss Ephemeris, synastry compatibility, transit forecasts, tarot spreads, and Firestore persistence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
